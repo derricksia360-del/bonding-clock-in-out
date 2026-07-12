@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Staff Clock In / Clock Out</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f4f5f7;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 16px;
+  }
+  .card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 32px 28px;
+    max-width: 400px;
+    width: 100%;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; color: #1a1a1a; }
+  .subtitle { color: #666; font-size: 13px; margin-bottom: 24px; }
+  label { font-size: 13px; font-weight: 600; color: #333; display: block; margin-bottom: 6px; }
+  select {
+    width: 100%; padding: 10px 12px; font-size: 15px;
+    border: 1px solid #ddd; border-radius: 8px; margin-bottom: 18px; background: #fff;
+  }
+  #clockTime {
+    text-align: center; font-size: 32px; font-weight: 700; color: #1a1a1a;
+    margin: 8px 0 4px; font-variant-numeric: tabular-nums;
+  }
+  #clockDate { text-align: center; color: #888; font-size: 13px; margin-bottom: 20px; }
+  .status-box {
+    background: #f8f9fb; border-radius: 10px; padding: 12px 14px;
+    font-size: 13px; color: #444; margin-bottom: 18px; min-height: 20px;
+    line-height: 1.5;
+  }
+  button#actionBtn {
+    width: 100%; padding: 16px; font-size: 17px; font-weight: 700;
+    border: none; border-radius: 10px; cursor: pointer; color: #fff;
+    background: #2563eb; transition: background 0.15s, opacity 0.15s;
+  }
+  button#actionBtn.out { background: #dc2626; }
+  button#actionBtn.done { background: #9ca3af; cursor: not-allowed; }
+  button#actionBtn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .msg { margin-top: 14px; font-size: 13px; text-align: center; line-height: 1.5; }
+  .msg.error { color: #dc2626; }
+  .msg.success { color: #16a34a; }
+  .msg.info { color: #666; }
+  .gps-warning {
+    background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412;
+    font-size: 12px; padding: 10px 12px; border-radius: 8px; margin-top: 16px; line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h1>Staff Attendance</h1>
+  <div class="subtitle">Clock in / out — GPS location required</div>
+
+  <label for="nameSelect">Select your name</label>
+  <select id="nameSelect">
+    <option value="">-- Choose a name --</option>
+    <!-- Add or remove staff names here -->
+    <option value="Darren Sia">Darren Sia</option>
+    <option value="Derrick Sia">Derrick Sia</option>
+    <option value="Wan Ting">Wan Ting</option>
+    <option value="Yaya Ah Pek">Yaya Ah Pek</option>
+    <option value="Ah Hao">Ah Hao</option>
+    <option value="Mike">Mike</option>
+    <option value="Andrew">Andrew</option>
+  </select>
+
+  <div id="clockTime">--:--:--</div>
+  <div id="clockDate">-</div>
+
+  <div class="status-box" id="statusBox">Select your name to check your status.</div>
+
+  <button id="actionBtn" disabled>Select a name first</button>
+
+  <div class="msg" id="msg"></div>
+
+  <div class="gps-warning">
+    ⚠️ Location access is required. Please allow GPS permission when prompted.
+    Using a fake/mock GPS location app is not permitted — clock in/out will be
+    rejected if your device is flagged or your location cannot be verified.
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   CONFIGURATION — edit these values
+   ============================================================ */
+// URL of your deployed Google Apps Script Web App (see deployment steps)
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyF91oxvnuuLQqm1_ZcjLEeUTVE585scAZHBwpA_ju_r8x2bGpmJP4tw1-fkiTuhEk/exec";
+
+/* ============================================================
+   Live clock display
+   ============================================================ */
+function updateClock() {
+  const now = new Date();
+  document.getElementById("clockTime").textContent =
+    now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  document.getElementById("clockDate").textContent =
+    now.toLocaleDateString([], { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+/* ============================================================
+   State
+   ============================================================ */
+const nameSelect = document.getElementById("nameSelect");
+const actionBtn = document.getElementById("actionBtn");
+const statusBox = document.getElementById("statusBox");
+const msgEl = document.getElementById("msg");
+
+let currentStatus = null; // { round, nextAction }
+
+nameSelect.addEventListener("change", refreshStatus);
+
+function setMsg(text, type) {
+  msgEl.textContent = text || "";
+  msgEl.className = "msg" + (type ? " " + type : "");
+}
+
+function todayISO() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+async function refreshStatus() {
+  const name = nameSelect.value;
+  setMsg("");
+  if (!name) {
+    actionBtn.disabled = true;
+    actionBtn.textContent = "Select a name first";
+    actionBtn.className = "";
+    statusBox.textContent = "Select your name to check your status.";
+    return;
+  }
+
+  statusBox.textContent = "Checking status...";
+  actionBtn.disabled = true;
+
+  try {
+    const url = `${APPS_SCRIPT_URL}?action=status&name=${encodeURIComponent(name)}&date=${todayISO()}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    currentStatus = data;
+
+    if (data.nextAction === "done") {
+      statusBox.textContent = `${name} has completed both rounds for today.`;
+      actionBtn.textContent = "All Done for Today";
+      actionBtn.className = "done";
+      actionBtn.disabled = true;
+    } else if (data.nextAction === "clockIn") {
+      statusBox.textContent = `Ready to clock in for Round ${data.round}.`;
+      actionBtn.textContent = `Clock In (Round ${data.round})`;
+      actionBtn.className = "";
+      actionBtn.disabled = false;
+    } else if (data.nextAction === "clockOut") {
+      statusBox.textContent = `Currently clocked in for Round ${data.round}. Ready to clock out.`;
+      actionBtn.textContent = `Clock Out (Round ${data.round})`;
+      actionBtn.className = "out";
+      actionBtn.disabled = false;
+    }
+  } catch (err) {
+    statusBox.textContent = "Could not reach the server. Check your connection or the script URL.";
+    actionBtn.disabled = true;
+  }
+}
+
+/* ============================================================
+   Geolocation
+   ============================================================ */
+function getPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("Your browser does not support GPS location."));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(pos),
+      (err) => reject(err),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  });
+}
+
+/* ============================================================
+   Clock in / out action
+   ============================================================ */
+actionBtn.addEventListener("click", async () => {
+  const name = nameSelect.value;
+  if (!name || !currentStatus) return;
+
+  setMsg("Getting your location...", "info");
+  actionBtn.disabled = true;
+
+  let position;
+  try {
+    position = await getPosition();
+  } catch (err) {
+    setMsg("Location access denied or unavailable. Please enable GPS and allow location permission, then try again.", "error");
+    actionBtn.disabled = false;
+    return;
+  }
+
+  const { latitude, longitude, accuracy } = position.coords;
+
+  // Basic client-side sanity check. NOTE: the browser Geolocation API cannot
+  // reliably detect mock-location apps on Android — that requires a native
+  // app using LocationManager.isFromMockProvider(). The real distance check
+  // is enforced again on the server so it cannot be bypassed by editing the page.
+  if (accuracy > 100) {
+    setMsg(`Your location accuracy is too low (±${Math.round(accuracy)}m). Move to an open area and try again.`, "error");
+    actionBtn.disabled = false;
+    return;
+  }
+
+  const action = currentStatus.nextAction; // "clockIn" or "clockOut"
+  setMsg("Submitting...", "info");
+
+  try {
+    const res = await fetch(APPS_SCRIPT_URL, {
+      method: "POST",
+      body: JSON.stringify({ action, name, lat: latitude, lng: longitude }),
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      setMsg(data.message, "success");
+      await refreshStatus();
+    } else {
+      setMsg(data.message || "Action failed.", "error");
+      actionBtn.disabled = false;
+    }
+  } catch (err) {
+    setMsg("Network error submitting to the server. Please try again.", "error");
+    actionBtn.disabled = false;
+  }
+});
+</script>
+
+</body>
+</html>
