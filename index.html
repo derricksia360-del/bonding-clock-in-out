@@ -41,6 +41,22 @@
     font-size: 13px; color: #444; margin-bottom: 18px; min-height: 20px;
     line-height: 1.5;
   }
+  #reasonSection {
+    display: none;
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 18px;
+  }
+  #reasonSection label { color: #9a3412; margin-bottom: 6px; }
+  #reasonSection .hint { font-size: 12px; color: #9a3412; margin-bottom: 8px; line-height: 1.4; }
+  #reasonInput {
+    width: 100%; padding: 10px 12px; font-size: 14px;
+    border: 1px solid #fed7aa; border-radius: 8px; resize: vertical;
+    min-height: 60px; font-family: inherit; background: #fff;
+  }
+  #reasonInput:focus { outline: none; border-color: #ea580c; }
   button#actionBtn {
     width: 100%; padding: 16px; font-size: 17px; font-weight: 700;
     border: none; border-radius: 10px; cursor: pointer; color: #fff;
@@ -83,6 +99,16 @@
 
   <div class="status-box" id="statusBox">Select your name to check your status.</div>
 
+  <div id="reasonSection">
+    <label for="reasonInput">Reason for morning absence</label>
+    <div class="hint">
+      You're clocking in for Round 2 without a Round 1 record today.
+      Please give a reason (e.g. half-day leave, doctor's appointment) —
+      it will be saved with your attendance record.
+    </div>
+    <textarea id="reasonInput" placeholder="e.g. Half day AM leave - personal errand"></textarea>
+  </div>
+
   <button id="actionBtn" disabled>Select a name first</button>
 
   <div class="msg" id="msg"></div>
@@ -121,8 +147,10 @@ const nameSelect = document.getElementById("nameSelect");
 const actionBtn = document.getElementById("actionBtn");
 const statusBox = document.getElementById("statusBox");
 const msgEl = document.getElementById("msg");
+const reasonSection = document.getElementById("reasonSection");
+const reasonInput = document.getElementById("reasonInput");
 
-let currentStatus = null; // { round, nextAction }
+let currentStatus = null; // { round, nextAction, round1Skipped }
 
 nameSelect.addEventListener("change", refreshStatus);
 
@@ -139,6 +167,14 @@ function todayISO() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+// Show/hide + reset the reason box. Only shown when the backend says
+// this clock-in is a Round 2 clock-in caused by a skipped Round 1
+// (half-day / AM leave scenario) — see round1Skipped from getStatus_.
+function updateReasonSection(show) {
+  reasonSection.style.display = show ? "block" : "none";
+  if (!show) reasonInput.value = "";
+}
+
 async function refreshStatus() {
   const name = nameSelect.value;
   setMsg("");
@@ -147,11 +183,13 @@ async function refreshStatus() {
     actionBtn.textContent = "Select a name first";
     actionBtn.className = "";
     statusBox.textContent = "Select your name to check your status.";
+    updateReasonSection(false);
     return;
   }
 
   statusBox.textContent = "Checking status...";
   actionBtn.disabled = true;
+  updateReasonSection(false);
 
   try {
     const url = `${APPS_SCRIPT_URL}?action=status&name=${encodeURIComponent(name)}&date=${todayISO()}`;
@@ -165,7 +203,12 @@ async function refreshStatus() {
       actionBtn.className = "done";
       actionBtn.disabled = true;
     } else if (data.nextAction === "clockIn") {
-      statusBox.textContent = `Ready to clock in for Round ${data.round}.`;
+      if (data.round === 2 && data.round1Skipped) {
+        statusBox.textContent = `No Round 1 record found today. Ready to clock in for Round 2 — please add a reason below.`;
+        updateReasonSection(true);
+      } else {
+        statusBox.textContent = `Ready to clock in for Round ${data.round}.`;
+      }
       actionBtn.textContent = `Clock In (Round ${data.round})`;
       actionBtn.className = "";
       actionBtn.disabled = false;
@@ -205,6 +248,20 @@ actionBtn.addEventListener("click", async () => {
   const name = nameSelect.value;
   if (!name || !currentStatus) return;
 
+  // If this is the half-day Round 2 clock-in case, require a reason
+  // before doing anything else (no point requesting GPS first).
+  const needsReason = currentStatus.nextAction === "clockIn" &&
+    currentStatus.round === 2 && currentStatus.round1Skipped;
+  let reason = "";
+  if (needsReason) {
+    reason = reasonInput.value.trim();
+    if (!reason) {
+      setMsg("Please enter a reason for your morning absence before clocking in.", "error");
+      reasonInput.focus();
+      return;
+    }
+  }
+
   setMsg("Getting your location...", "info");
   actionBtn.disabled = true;
 
@@ -232,10 +289,13 @@ actionBtn.addEventListener("click", async () => {
   const action = currentStatus.nextAction; // "clockIn" or "clockOut"
   setMsg("Submitting...", "info");
 
+  const payload = { action, name, lat: latitude, lng: longitude };
+  if (needsReason) payload.reason = reason;
+
   try {
     const res = await fetch(APPS_SCRIPT_URL, {
       method: "POST",
-      body: JSON.stringify({ action, name, lat: latitude, lng: longitude }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
 
