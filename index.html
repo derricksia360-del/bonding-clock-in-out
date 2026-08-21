@@ -65,6 +65,12 @@
   button#actionBtn.out { background: #dc2626; }
   button#actionBtn.done { background: #9ca3af; cursor: not-allowed; }
   button#actionBtn:disabled { opacity: 0.6; cursor: not-allowed; }
+  #refreshBtn {
+    width: 100%; padding: 10px; font-size: 13px; font-weight: 600;
+    border: 1px solid #ddd; border-radius: 8px; cursor: pointer;
+    background: #fff; color: #444; margin-bottom: 12px;
+  }
+  #refreshBtn:disabled { opacity: 0.5; cursor: not-allowed; }
   .msg { margin-top: 14px; font-size: 13px; text-align: center; line-height: 1.5; }
   .msg.error { color: #dc2626; }
   .msg.success { color: #16a34a; }
@@ -98,6 +104,8 @@
   <div id="clockDate">-</div>
 
   <div class="status-box" id="statusBox">Select your name to check your status.</div>
+
+  <button id="refreshBtn" style="display:none;">🔄 Refresh Status</button>
 
   <div id="reasonSection">
     <label for="reasonInput">Reason for morning absence</label>
@@ -149,10 +157,12 @@ const statusBox = document.getElementById("statusBox");
 const msgEl = document.getElementById("msg");
 const reasonSection = document.getElementById("reasonSection");
 const reasonInput = document.getElementById("reasonInput");
+const refreshBtn = document.getElementById("refreshBtn");
 
 let currentStatus = null; // { round, nextAction, round1Skipped }
 
 nameSelect.addEventListener("change", refreshStatus);
+refreshBtn.addEventListener("click", refreshStatus);
 
 function setMsg(text, type) {
   msgEl.textContent = text || "";
@@ -184,16 +194,24 @@ async function refreshStatus() {
     actionBtn.className = "";
     statusBox.textContent = "Select your name to check your status.";
     updateReasonSection(false);
+    refreshBtn.style.display = "none";
     return;
   }
 
   statusBox.textContent = "Checking status...";
   actionBtn.disabled = true;
   updateReasonSection(false);
+  refreshBtn.style.display = "block";
+  refreshBtn.disabled = true;
 
   try {
-    const url = `${APPS_SCRIPT_URL}?action=status&name=${encodeURIComponent(name)}&date=${todayISO()}`;
-    const res = await fetch(url);
+    // FIX: cache-busting query param + no-store fetch option.
+    // Without this, some mobile browsers / WebViews / network proxies
+    // will serve a STALE cached response for this exact URL (same
+    // name+date every time), which can show "Clock In" even after a
+    // clock-in has already been successfully recorded on the server.
+    const url = `${APPS_SCRIPT_URL}?action=status&name=${encodeURIComponent(name)}&date=${todayISO()}&_ts=${Date.now()}`;
+    const res = await fetch(url, { cache: "no-store" });
     const data = await res.json();
     currentStatus = data;
 
@@ -221,6 +239,8 @@ async function refreshStatus() {
   } catch (err) {
     statusBox.textContent = "Could not reach the server. Check your connection or the script URL.";
     actionBtn.disabled = true;
+  } finally {
+    refreshBtn.disabled = false;
   }
 }
 
